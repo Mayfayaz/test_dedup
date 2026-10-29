@@ -69,6 +69,21 @@ def estimated_jaccard(sig_a, sig_b):
     return sum(1 for x, y in zip(sig_a, sig_b) if x == y) / len(sig_a)
 
 
+def exact_jaccard(text_a, text_b, k=5):
+    """Exact Jaccard similarity of two documents' shingle sets.
+
+    Unlike the MinHash estimate, this has no sampling noise — but it
+    costs a full shingle-set comparison per pair, so it is used to
+    re-score LSH candidates (see verify_exact), never to compare
+    every pair. Two empty documents score 0.0, matching the rule that
+    an empty document is never a duplicate of anything.
+    """
+    set_a, set_b = shingles(text_a, k=k), shingles(text_b, k=k)
+    if not set_a or not set_b:
+        return 0.0
+    return len(set_a & set_b) / len(set_a | set_b)
+
+
 def _lsh_candidates(signatures, num_bands):
     """Candidate pairs that share at least one LSH band bucket.
 
@@ -112,20 +127,33 @@ class _UnionFind:
             self.parent[rb] = ra
 
 
-def find_duplicates(docs, threshold=0.5, num_perm=128, num_bands=32, k=5):
+def find_duplicates(docs, threshold=0.5, num_perm=128, num_bands=32, k=5,
+                    verify_exact=False):
     """Find near-duplicate clusters among docs (list of strings).
 
     Returns (clusters, pairs): clusters is a list of sorted index lists
-    (each with 2+ docs), pairs is a list of (i, j, estimated_jaccard)
-    for every verified pair at or above threshold. LSH proposes
-    candidates; only pairs whose estimated Jaccard clears the threshold
-    are reported, so LSH false positives never surface.
+    (each with 2+ docs), pairs is a list of (i, j, similarity) for
+    every verified pair at or above threshold. LSH proposes candidates;
+    only pairs whose similarity clears the threshold are reported, so
+    LSH false positives never surface.
+
+    With verify_exact=True, each candidate pair is re-scored with the
+    exact shingle-set Jaccard instead of the MinHash estimate, and the
+    reported similarity is that exact value. This removes borderline
+    false positives caused by estimation noise (~±0.04 at 128
+    permutations) at the cost of one shingle-set comparison per
+    candidate pair — still far cheaper than comparing every pair.
+    Note it cannot recover pairs LSH never proposed: verification
+    filters candidates, it does not add recall.
     """
     signatures = [minhash_signature(d, num_perm=num_perm, k=k)
                   for d in docs]
     pairs = []
     for i, j in sorted(_lsh_candidates(signatures, num_bands)):
-        sim = estimated_jaccard(signatures[i], signatures[j])
+        if verify_exact:
+            sim = exact_jaccard(docs[i], docs[j], k=k)
+        else:
+            sim = estimated_jaccard(signatures[i], signatures[j])
         if sim >= threshold:
             pairs.append((i, j, round(sim, 3)))
     uf = _UnionFind(len(docs))

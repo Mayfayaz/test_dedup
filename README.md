@@ -42,16 +42,24 @@ clusters, pairs = find_duplicates(docs, threshold=0.4)
 # pairs:    [(0, 1, 1.0), (0, 2, 0.523), ...] — verified pairs
 
 kept = dedup(docs, threshold=0.4)  # first doc of each cluster survives
+
+# Exact verification: re-score LSH candidates with exact shingle-set
+# Jaccard instead of the MinHash estimate, filtering out borderline
+# false positives caused by estimation noise.
+clusters, pairs = find_duplicates(docs, threshold=0.5, verify_exact=True)
+from dedup import exact_jaccard
+exact_jaccard(docs[0], docs[1])  # 0.545 for the one-word-swap pair
 ```
 
 Key parameters:
 
 | Parameter | Default | Meaning |
 |-----------|---------|---------|
-| `threshold` | 0.5 | Minimum estimated Jaccard to report a pair |
+| `threshold` | 0.5 | Minimum Jaccard to report a pair |
 | `num_perm` | 128 | MinHash signature length (accuracy vs. speed) |
 | `num_bands` | 32 | LSH bands (more bands = fewer false candidates) |
 | `k` | 5 | Word shingle size |
+| `verify_exact` | False | Re-score candidates with exact shingle Jaccard (see below) |
 
 ## How the tuning works
 
@@ -67,7 +75,10 @@ at the cost of more candidates; lower the threshold to report them.
 
 - Similarity is estimated, not exact: MinHash agreement has sampling
   noise (~±0.04 at 128 permutations near s = 0.5). For borderline
-  pairs, raise `num_perm`.
+  pairs, raise `num_perm` or pass `verify_exact=True` to re-score
+  LSH candidates with exact shingle-set Jaccard — one set comparison
+  per candidate pair, not per pair of documents. Verification filters
+  candidates; it cannot recover pairs LSH never proposed.
 - LSH can miss pairs: a true near-duplicate that agrees on no whole
   band is never proposed. That probability is small for pairs well
   above the S-curve's knee, and zero for identical documents.
@@ -76,9 +87,9 @@ at the cost of more candidates; lower the threshold to report them.
 
 ## Files
 
-- `dedup.py` — shingling, MinHash, LSH banding, clustering, `dedup()`
+- `dedup.py` — shingling, MinHash, LSH banding, exact verification, clustering, `dedup()`
 - `demo.py` — a 6-document corpus: exact dup, near-dups, unrelated docs
-- `test_dedup.py` — 12 unit tests
+- `test_dedup.py` — 16 unit tests
 
 ## License
 

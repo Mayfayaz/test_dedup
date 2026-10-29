@@ -5,6 +5,7 @@ import unittest
 from dedup import (
     dedup,
     estimated_jaccard,
+    exact_jaccard,
     find_duplicates,
     minhash_signature,
     shingles,
@@ -76,6 +77,40 @@ class TestFindDuplicates(unittest.TestCase):
     def test_single_doc(self):
         clusters, pairs = find_duplicates([FOX])
         self.assertEqual((clusters, pairs), ([], []))
+
+
+class TestExactVerification(unittest.TestCase):
+    # Two word swaps: MinHash overestimates this pair (0.547) above
+    # its exact shingle Jaccard (0.478) — a borderline false positive
+    # that exact verification must filter out at threshold 0.5.
+    FOX_TWO_SWAPS = ("leaps quick brown fox jumps over the leaps dog "
+                     "near the river bank on a bright sunny morning "
+                     "in early spring")
+
+    def test_exact_jaccard_values(self):
+        self.assertEqual(exact_jaccard(FOX, FOX.upper()), 1.0)
+        self.assertEqual(exact_jaccard(FOX, QUBITS), 0.0)
+        self.assertAlmostEqual(exact_jaccard(FOX, FOX_NEAR), 12 / 22)
+        self.assertEqual(exact_jaccard(FOX, ""), 0.0)
+        self.assertEqual(exact_jaccard("", ""), 0.0)
+
+    def test_verify_exact_reports_exact_scores(self):
+        _, pairs = find_duplicates([FOX, FOX_NEAR], threshold=0.4,
+                                   verify_exact=True)
+        self.assertEqual(pairs, [(0, 1, 0.545)])
+
+    def test_verify_exact_filters_estimation_false_positive(self):
+        _, estimated = find_duplicates([FOX, self.FOX_TWO_SWAPS],
+                                       threshold=0.5)
+        self.assertEqual(len(estimated), 1)  # estimate 0.547 passes
+        clusters, exact = find_duplicates([FOX, self.FOX_TWO_SWAPS],
+                                          threshold=0.5, verify_exact=True)
+        self.assertEqual((clusters, exact), ([], []))  # exact 0.478 fails
+
+    def test_verify_exact_flows_through_dedup(self):
+        kept = dedup([FOX, self.FOX_TWO_SWAPS], threshold=0.5,
+                     verify_exact=True)
+        self.assertEqual(kept, [FOX, self.FOX_TWO_SWAPS])
 
 
 if __name__ == "__main__":

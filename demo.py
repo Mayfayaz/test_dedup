@@ -1,6 +1,6 @@
 """Demo: find near-duplicates in a small messy corpus."""
 
-from dedup import dedup, find_duplicates
+from dedup import dedup, find_duplicates, suggest_lsh_params
 
 CORPUS = [
     # 0-1: exact duplicates (one re-cased / re-punctuated)
@@ -22,6 +22,8 @@ CORPUS = [
 ]
 
 if __name__ == "__main__":
+    print("Suggested LSH split for threshold 0.4:",
+          suggest_lsh_params(0.4), "(num_bands, rows)")
     # Threshold 0.4: the one-word-swap near-duplicates sit at true
     # Jaccard ~0.52, comfortably above it despite estimation noise.
     clusters, pairs = find_duplicates(CORPUS, threshold=0.4)

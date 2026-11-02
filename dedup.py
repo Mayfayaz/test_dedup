@@ -111,6 +111,51 @@ def _lsh_candidates(signatures, num_bands):
     return candidates
 
 
+def lsh_candidate_probability(similarity, num_bands, rows):
+    """Probability that two docs with true Jaccard `similarity` become
+    an LSH candidate pair: 1 - (1 - similarity**rows)**num_bands.
+
+    This is the S-curve behind the tuning section of the README: a
+    pair must agree on at least one whole band of `rows` signature
+    values to be proposed.
+    """
+    if not 0.0 <= similarity <= 1.0:
+        raise ValueError("similarity must be between 0 and 1")
+    if num_bands < 1 or rows < 1:
+        raise ValueError("num_bands and rows must be positive")
+    return 1 - (1 - similarity ** rows) ** num_bands
+
+
+def suggest_lsh_params(threshold, num_perm=128):
+    """Pick (num_bands, rows) whose S-curve knee sits near `threshold`.
+
+    Among all band splits of a `num_perm`-long signature (rows must
+    divide num_perm so bands are equal), this returns the split whose
+    candidate probability at the threshold is closest to 0.5 — the
+    point where the S-curve is steepest, so pairs just above the
+    threshold are usually proposed and pairs just below usually are
+    not. Ties go to the finer split (fewer rows per band).
+
+    Example: suggest_lsh_params(0.4) returns (32, 4), the defaults,
+    while a strict 0.8 threshold returns a coarser split with more
+    rows per band, since only very similar pairs need proposing.
+    """
+    if not 0.0 < threshold < 1.0:
+        raise ValueError("threshold must be strictly between 0 and 1")
+    if num_perm < 1:
+        raise ValueError("num_perm must be positive")
+    best = None
+    for rows in range(1, num_perm + 1):
+        if num_perm % rows:
+            continue
+        num_bands = num_perm // rows
+        distance = abs(lsh_candidate_probability(threshold, num_bands,
+                                                 rows) - 0.5)
+        if best is None or distance < best[0]:
+            best = (distance, num_bands, rows)
+    return best[1], best[2]
+
+
 class _UnionFind:
     def __init__(self, n):
         self.parent = list(range(n))
@@ -166,11 +211,23 @@ def find_duplicates(docs, threshold=0.5, num_perm=128, num_bands=32, k=5,
     return clusters, pairs
 
 
-def dedup(docs, **kwargs):
-    """Return docs with near-duplicates removed, keeping the first of
-    each cluster. Extra kwargs pass through to find_duplicates."""
+def dedup(docs, keep="first", **kwargs):
+    """Return docs with near-duplicates removed, keeping one doc per
+    cluster. Extra kwargs pass through to find_duplicates.
+
+    keep="first" (default) keeps the earliest doc of each cluster.
+    keep="longest" keeps the longest doc of each cluster instead —
+    the fuller copy, e.g. when a later scrape captured more of the
+    article than an earlier truncated one. Ties keep the earliest doc.
+    """
+    if keep not in ("first", "longest"):
+        raise ValueError("keep must be 'first' or 'longest'")
     clusters, _ = find_duplicates(docs, **kwargs)
     dropped = set()
     for cluster in clusters:
-        dropped.update(cluster[1:])
+        if keep == "longest":
+            survivor = max(cluster, key=lambda i: len(docs[i]))
+        else:
+            survivor = cluster[0]
+        dropped.update(i for i in cluster if i != survivor)
     return [d for i, d in enumerate(docs) if i not in dropped]

@@ -42,6 +42,7 @@ clusters, pairs = find_duplicates(docs, threshold=0.4)
 # pairs:    [(0, 1, 1.0), (0, 2, 0.523), ...] — verified pairs
 
 kept = dedup(docs, threshold=0.4)  # first doc of each cluster survives
+kept = dedup(docs, threshold=0.4, keep="longest")  # fullest copy survives
 
 # Exact verification: re-score LSH candidates with exact shingle-set
 # Jaccard instead of the MinHash estimate, filtering out borderline
@@ -60,6 +61,7 @@ Key parameters:
 | `num_bands` | 32 | LSH bands (more bands = fewer false candidates) |
 | `k` | 5 | Word shingle size |
 | `verify_exact` | False | Re-score candidates with exact shingle Jaccard (see below) |
+| `keep` (dedup only) | `"first"` | Which doc of each cluster survives: `"first"` or `"longest"` (fullest copy; ties keep the first) |
 
 ## How the tuning works
 
@@ -70,6 +72,30 @@ The defaults (128 permutations, 32 bands of 4 rows) give an S-curve
 that catches most pairs above ~0.4 similarity while skipping almost
 all unrelated pairs. Raise `num_bands` to catch lower-similarity pairs
 at the cost of more candidates; lower the threshold to report them.
+
+Rather than hand-tuning, ask for the split whose S-curve knee sits
+near your threshold:
+
+```python
+from dedup import suggest_lsh_params, lsh_candidate_probability
+
+suggest_lsh_params(0.4)  # (32, 4) — the defaults
+suggest_lsh_params(0.8)  # (8, 16) — coarser: only very similar pairs
+                         # need proposing at a strict threshold
+
+num_bands, rows = suggest_lsh_params(0.6)
+clusters, pairs = find_duplicates(docs, threshold=0.6, num_bands=num_bands)
+# The suggested split is the closest achievable to a 0.5 candidate
+# probability at the threshold — not every threshold has a split
+# that lands exactly on 0.5.
+lsh_candidate_probability(0.6, num_bands, rows)  # 0.237 for (16, 8)
+```
+
+`suggest_lsh_params` tries every split that tiles the signature
+evenly and picks the one whose candidate probability at the
+threshold is closest to 0.5, where the S-curve is steepest — so
+pairs just above the threshold are usually proposed and pairs just
+below usually are not.
 
 ## Caveats
 
@@ -87,9 +113,9 @@ at the cost of more candidates; lower the threshold to report them.
 
 ## Files
 
-- `dedup.py` — shingling, MinHash, LSH banding, exact verification, clustering, `dedup()`
+- `dedup.py` — shingling, MinHash, LSH banding, exact verification, clustering, `dedup()`, LSH parameter suggestion
 - `demo.py` — a 6-document corpus: exact dup, near-dups, unrelated docs
-- `test_dedup.py` — 16 unit tests
+- `test_dedup.py` — 25 unit tests
 
 ## License
 

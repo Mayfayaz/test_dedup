@@ -7,8 +7,10 @@ from dedup import (
     estimated_jaccard,
     exact_jaccard,
     find_duplicates,
+    lsh_candidate_probability,
     minhash_signature,
     shingles,
+    suggest_lsh_params,
 )
 
 FOX = ("the quick brown fox jumps over the lazy dog near the river "
@@ -79,6 +81,23 @@ class TestFindDuplicates(unittest.TestCase):
         self.assertEqual((clusters, pairs), ([], []))
 
 
+class TestDedupKeep(unittest.TestCase):
+    def test_keep_longest_keeps_fullest_copy(self):
+        # FOX_NEAR is one word longer than FOX ("leaps" vs "jumps"
+        # is the same length, so use a strictly longer near-dup).
+        longer = FOX + " and the birds sang softly overhead"
+        kept = dedup([FOX, longer, QUBITS], threshold=0.4, keep="longest")
+        self.assertEqual(kept, [longer, QUBITS])
+
+    def test_keep_longest_tie_keeps_first(self):
+        kept = dedup([FOX, FOX, QUBITS], threshold=0.4, keep="longest")
+        self.assertEqual(kept, [FOX, QUBITS])
+
+    def test_invalid_keep_raises(self):
+        with self.assertRaises(ValueError):
+            dedup([FOX, FOX], keep="shortest")
+
+
 class TestExactVerification(unittest.TestCase):
     # Two word swaps: MinHash overestimates this pair (0.547) above
     # its exact shingle Jaccard (0.478) — a borderline false positive
@@ -111,6 +130,47 @@ class TestExactVerification(unittest.TestCase):
         kept = dedup([FOX, self.FOX_TWO_SWAPS], threshold=0.5,
                      verify_exact=True)
         self.assertEqual(kept, [FOX, self.FOX_TWO_SWAPS])
+
+
+class TestSuggestLshParams(unittest.TestCase):
+    def test_defaults_are_optimal_for_threshold_0_4(self):
+        self.assertEqual(suggest_lsh_params(0.4), (32, 4))
+
+    def test_strict_threshold_gets_coarser_split(self):
+        # A 0.8 threshold only needs very similar pairs proposed, so
+        # the knee moves up: more rows per band, fewer bands.
+        num_bands, rows = suggest_lsh_params(0.8)
+        self.assertEqual(num_bands * rows, 128)
+        self.assertGreater(rows, 4)
+        # ...and the suggested split really is near its knee at 0.8.
+        prob = lsh_candidate_probability(0.8, num_bands, rows)
+        self.assertTrue(0.1 < prob < 0.9)
+
+    def test_split_always_tiles_the_signature(self):
+        for threshold in (0.2, 0.5, 0.7, 0.9):
+            num_bands, rows = suggest_lsh_params(threshold)
+            self.assertEqual(num_bands * rows, 128)
+            self.assertEqual(128 % rows, 0)
+
+    def test_suggested_params_find_duplicates(self):
+        num_bands, rows = suggest_lsh_params(0.4)
+        clusters, _ = find_duplicates([FOX, FOX.upper(), FOX_NEAR, QUBITS],
+                                      threshold=0.4, num_bands=num_bands)
+        self.assertEqual(clusters, [[0, 1, 2]])
+        self.assertEqual(rows, 128 // num_bands)
+
+    def test_probability_matches_formula(self):
+        self.assertAlmostEqual(
+            lsh_candidate_probability(0.5, 32, 4),
+            1 - (1 - 0.5 ** 4) ** 32)
+
+    def test_invalid_inputs_raise(self):
+        with self.assertRaises(ValueError):
+            suggest_lsh_params(0.0)
+        with self.assertRaises(ValueError):
+            suggest_lsh_params(1.0)
+        with self.assertRaises(ValueError):
+            lsh_candidate_probability(1.5, 32, 4)
 
 
 if __name__ == "__main__":
